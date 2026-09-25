@@ -284,22 +284,27 @@ quoting), joined with `,`, and written with `Print #f` (adds a newline).
 
 ## 9. Divergence Table — Code vs Rules R1–R7
 
-> **Methodology (v3):** `tools/rules_check.py` (v3) implements every rule purely from
+> **Methodology (v4):** `tools/rules_check.py` (v4) implements every rule purely from
 > `BUSINESS_RULES.md`, reading all thresholds from `data/parameters.csv`, with no VBA
-> behaviour copied.  It labels every mismatch with the divergence row responsible and
+> behaviour copied.  It labels every mismatch with the precise divergence tag(s)
+> responsible (including compound tags for rows where multiple bugs interact) and
 > prints a summary count.  The table below is built entirely from that output.
 >
 > **Checker summary (218 mismatches):**
 >
 > | Div tag | Count | Output files affected |
 > |:---:|---:|---|
-> | D1 | 19 | `rap_hebdo.csv` (all L4 rows) |
-> | D1+D4 | 20 | `mens_lignes.csv` (all rows), `mens_global.csv` |
-> | D2 | 1 | `rap_hebdo.csv` W27 L3 |
-> | D5 | 178 | `pareto.csv` (all weeks) |
+> | D1 | 16 | `rap_hebdo.csv` (all L4 `nb_def`/`tx_def` rows) |
+> | D1+D4 | 4 | `mens_lignes.csv` (L4 rows, June + July) |
+> | D1+D4+D6 | 2 | `mens_global.csv` (June + July `defauts`) |
+> | D2 | 1 | `rap_hebdo.csv` W27 L3 `statut` |
+> | D4 | 8 | `mens_lignes.csv` (L1, L3 rows — ACCEPT exclusion only) |
+> | D4+D6 | 4 | `mens_lignes.csv` (L2 rows — ACCEPT exclusion + NC-0040 zero-prod) |
+> | D5 | 178 | `pareto.csv` (all weeks, all fields) |
+> | D6 | 5 | `rap_hebdo.csv` W25 L2; `mens_lignes.csv` + `mens_global.csv` June `cnq_eur` |
 > | **Total** | **218** | |
 
-| # | Rule | VBA location | Code behaviour | Rule requirement | Verified proof — exact numbers from `rules_check.py` v3 |
+| # | Rule | VBA location | Code behaviour | Rule requirement | Verified proof — exact numbers from `rules_check.py` v4 |
 |:---:|:---:|---|---|---|---|
 | D1 | R1 | `Module2.bas` line 85 (`CalcHebdo`)<br>`nd(s,l) = nd(s,l) + q/2`<br>and line 267 (`CalcMensuel`) | Defective quantity for **line L4 only** is divided by 2 before accumulation in both the weekly and monthly paths. The scrap accumulator `rb` uses the full quantity (line 89/273), so only the defect count, defect rate, and derived tx\_def are affected — not the scrap rate, scrap count, or CNQ. The 2011 modification is marked `' ne pas toucher`. | R1: *"defect rate (%) = total defective quantity / total quantity produced × 100 — All dispositions … count as defects."* No per-line adjustment to defective quantity is stated. | **Weekly (19 field mismatches):** Every L4 `nb_def` and `tx_def` in `rap_hebdo.csv` is exactly half the rule value. Example: W26 L4 `nb_def = 4.5` (legacy) vs `9.0` (rule); W28 L4 `nb_def = 14` vs `28`; W29 L4 `nb_def = 20` vs `40`. The fractional `4.5` is proof of halving. **Monthly (subset of D1+D4 tag):** June L4 `defauts = 16.5` (legacy) vs `34.0` (rule); July L4 `defauts = 35` vs `76`. |
 | D2 | R2 | `Module2.bas` line 102<br>`If txr >= 3 Then st = "ROUGE"` | Scrap rate of **exactly 3.00 %** is classified `ROUGE`. | R2: *"scrap rate > 3.0 % → RED"* — strictly greater than. At exactly 3.00 % the correct status is ORANGE. | **1 field mismatch.** `rap_hebdo.csv` W27 L3: `rebut = 9`, `produit = 300`, `tx_rebut = 3.00` (= 9 / 300 × 100). Legacy `statut = ROUGE`; `rules_check.py` computes `ORANGE`. This is the only row in the dataset where `tx_rebut` lands exactly on the threshold. |
