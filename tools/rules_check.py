@@ -1,6 +1,6 @@
 """
-tools/rules_check.py  (v3 – rule-only implementation)
-=======================================================
+tools/rules_check.py  (v4 – precise per-mismatch tagging)
+===========================================================
 Every computation in this file is derived solely from BUSINESS_RULES.md.
 No VBA behaviour is copied, mirrored, or approximated.
 
@@ -14,6 +14,21 @@ Run from the repository root:
 
 Output: mismatch list grouped by divergence row (D1 … Dn), plus a summary
 count table.
+
+Tagging rules (each mismatch carries the divergence that *causes* it):
+  D1  – L4 defective qty halved in CalcHebdo/CalcMensuel (affects nb_def,
+         tx_def for L4 only; never affects rebut, tx_rebut, or cnq_eur)
+  D2  – scrap status threshold >= 3 instead of > 3  (statut field only)
+  D3  – Colorer cell colour vs text mismatch (not in CSVs)
+  D4  – ACCEPT excluded from monthly nd (affects monthly defauts/tx_def;
+         never affects rebut, tx_rebut, or cnq_eur since ACCEPT costs 0)
+  D5  – Pareto grouped Sun-Sat instead of ISO Mon-Sun (all pareto fields)
+  D6  – Records on zero-production days silently excluded in CalcHebdo and
+         CalcMensuel (affects any line that has such records; only confirmed
+         instance: NC-0040 L2 2026-06-17, disposition REWORK → affects
+         nb_def, tx_def, cnq_eur for L2; never rebut/tx_rebut for this rec)
+  D7  – parameters.csv not loaded (0 numerical mismatches on current data)
+  D8  – Recurrence forward-scan (0 numerical mismatches on current data)
 """
 
 import csv
@@ -36,24 +51,24 @@ LEGACY = os.path.join(ROOT, "sorties_legacy")
 # ---------------------------------------------------------------------------
 ASSUMPTIONS = [
     ("A1", "R3",
-     "Weeks are ISO weeks (Mon–Sun) per §1 of BUSINESS_RULES.md.  The legacy "
+     "Weeks are ISO weeks (Mon-Sun) per §1 of BUSINESS_RULES.md.  The legacy "
      "output labels each Pareto week by the Sunday date of that week.  This "
      "checker uses the same Sunday-of-ISO-week label so that rows can be "
      "matched against sorties_legacy/pareto.csv.  The rule does not specify "
-     "the label format; the Sunday label is an *output formatting* choice, "
+     "the label format; the Sunday label is an output-formatting choice, "
      "not a computational one."),
     ("A2", "R3",
      "When two defect types have equal quantity in a week, this checker ranks "
      "the lower-numbered code first (D01 before D02, etc.).  BUSINESS_RULES.md "
      "does not specify a tie-break order.  The legacy VBA applies the same "
-     "ordering (its arrays are indexed 1–8 in code order)."),
+     "ordering (its arrays are indexed 1-8 in code order)."),
     ("A3", "R1/R7",
      "BUSINESS_RULES.md does not say to exclude defect records that fall on "
      "days for which no production entry exists.  This checker includes all "
      "records in the defect totals.  Production totals come only from "
      "production_log.csv.  If a (line, week/month) has defect records but "
      "zero production, a rate cannot be computed and the row is omitted from "
-     "the report — consistent with R1's formula requiring a non-zero denominator."),
+     "the report -- consistent with R1's formula requiring a non-zero denominator."),
     ("A4", "R3",
      "R3 ranks by 'total defective quantity'.  If a defect_log record carries "
      "a negative qty (a correction entry such as NC-0125), it is summed "
@@ -144,15 +159,15 @@ def sunday_of_iso_week(d: date) -> date:
     """Return the Sunday that ends the ISO week containing d.
     Used only for labelling the Pareto output to match sorties_legacy/ format.
     See assumption A1."""
-    # ISO weekday: Mon=1 … Sun=7
+    # ISO weekday: Mon=1 ... Sun=7
     return d + timedelta(days=7 - d.isoweekday())
 
 # ---------------------------------------------------------------------------
-# R4 – Cost of non-quality
+# R4 -- Cost of non-quality
 # "For each record:
-#   SCRAP  → qty × part unit cost
-#   REWORK → qty × rework hours of the defect type × 45 €
-#   ACCEPT → 0 € (the record still counts as a defect)
+#   SCRAP  -> qty x part unit cost
+#   REWORK -> qty x rework hours of the defect type x 45 EUR
+#   ACCEPT -> 0 EUR (the record still counts as a defect)
 # A D06 (delamination) record declared as REWORK is costed as SCRAP,
 # because delamination is not reworkable."
 # ---------------------------------------------------------------------------
@@ -164,18 +179,18 @@ def r4_cnq(rec, defect_types, parts, labour_rate):
         return round(qty * parts[rec["part_ref"]], 0)
     if disp == "REWORK":
         if code == "D06":
-            # "D06 … declared as REWORK is costed as SCRAP" (R4)
+            # "D06 ... declared as REWORK is costed as SCRAP" (R4)
             return round(qty * parts[rec["part_ref"]], 0)
         rh = defect_types[code]["rework_hours"]
         return round(qty * rh * labour_rate, 0)
-    # ACCEPT → 0
+    # ACCEPT -> 0
     return 0.0
 
 # ---------------------------------------------------------------------------
-# R2 – Scrap rate status
-# "scrap rate > 3.0 % → RED
-#  scrap rate > 2.0 % and ≤ 3.0 % → ORANGE
-#  scrap rate ≤ 2.0 % → GREEN"
+# R2 -- Scrap rate status
+# "scrap rate > 3.0 % -> RED
+#  scrap rate > 2.0 % and <= 3.0 % -> ORANGE
+#  scrap rate <= 2.0 % -> GREEN"
 # (See A6 for French label mapping.)
 # ---------------------------------------------------------------------------
 def r2_status(scrap_pct, red_t, org_t):
@@ -186,10 +201,10 @@ def r2_status(scrap_pct, red_t, org_t):
     return "VERT"
 
 # ---------------------------------------------------------------------------
-# R5 – Severity escalation
+# R5 -- Severity escalation
 # "Each record takes the base severity of its defect type.
 #  If the record quantity is 20 or more, the severity is escalated by one
-#  level (MINOR → MAJOR, MAJOR → CRITICAL). CRITICAL stays CRITICAL."
+#  level (MINOR -> MAJOR, MAJOR -> CRITICAL). CRITICAL stays CRITICAL."
 # ---------------------------------------------------------------------------
 _SEV = ["MINOR", "MAJOR", "CRITICAL"]
 
@@ -200,10 +215,10 @@ def r5_severity(base_severity, qty, esc_qty):
     return _SEV[idx]
 
 # ---------------------------------------------------------------------------
-# R1 + R2 + R4 — Weekly indicators
-# R1: "defect rate (%) = total defective quantity / total quantity produced × 100
+# R1 + R2 + R4 -- Weekly indicators
+# R1: "defect rate (%) = total defective quantity / total quantity produced x 100
 #      All dispositions (SCRAP, REWORK, ACCEPT) count as defects."
-# R2: "scrap rate (%) = scrapped quantity / total quantity produced × 100"
+# R2: "scrap rate (%) = scrapped quantity / total quantity produced x 100"
 # R4: CNQ summed per line per week.
 # See A3 for records on zero-production days.
 # ---------------------------------------------------------------------------
@@ -221,7 +236,7 @@ def compute_weekly(records, prod, defect_types, parts, params):
     for (d, line), qty in prod.items():
         prod_wk[(iso_year_week(d), line)] += qty
 
-    # Sum defects per ISO week/line — A3: include ALL records, no day-level filter
+    # Sum defects per ISO week/line -- A3: include ALL records, no day-level filter
     for rec in records:
         key = (iso_year_week(rec["date"]), rec["line"])
         defect_wk[key] += rec["qty"]
@@ -254,7 +269,7 @@ def compute_weekly(records, prod, defect_types, parts, params):
     return rows
 
 # ---------------------------------------------------------------------------
-# R3 – Weekly Pareto
+# R3 -- Weekly Pareto
 # "For each week, defect types are ranked by total defective quantity
 #  (descending), with each type's share and the cumulative percentage.
 #  The types needed to reach 80 % cumulative are marked as priorities
@@ -271,7 +286,7 @@ def compute_pareto(records, defect_types):
     rows = []
     for sun in sorted(qty_by_week):
         week_data = qty_by_week[sun]
-        # A4: exclude codes with net qty ≤ 0
+        # A4: exclude codes with net qty <= 0
         active = [(c, q) for c, q in week_data.items() if q > 0]
         if not active:
             continue
@@ -298,12 +313,13 @@ def compute_pareto(records, defect_types):
     return rows
 
 # ---------------------------------------------------------------------------
-# R5 + R6 – Alerts
+# R5 + R6 -- Alerts
 # R5: "Every CRITICAL record generates an alert in the weekly and monthly
 #      summaries."
 # R6: "If the same defect code is recorded on the same part reference 3 or
 #      more times within any 7-day window (first and third occurrence at most
-#      6 days apart), the tool raises a RECURRENCE flag."
+#      6 days apart), the tool raises a RECURRENCE flag and recommends opening
+#      an 8D problem-solving report."
 # ---------------------------------------------------------------------------
 def compute_alerts(records, defect_types, params):
     esc_qty = int(params["severity_escalation_qty"])
@@ -314,7 +330,7 @@ def compute_alerts(records, defect_types, params):
 
     # ---- R5: CRITICAL alerts ------------------------------------------
     # "Each record takes the base severity of its defect type."
-    # R5 applies to ALL records (no production-day filter is stated).
+    # R5 applies to ALL records; no production-day filter is stated.
     for rec in records:
         base = defect_types[rec["defect_code"]]["base_severity"]
         eff  = r5_severity(base, rec["qty"], esc_qty)
@@ -331,7 +347,7 @@ def compute_alerts(records, defect_types, params):
             })
 
     # ---- R6: Recurrence -----------------------------------------------
-    # "same defect code … same part reference … 3 or more times within any
+    # "same defect code ... same part reference ... 3 or more times within any
     #  7-day window (first and third occurrence at most 6 days apart)"
     # Plain reading: sliding window of rec_win days; raise ONE flag per
     # qualifying window (keyed on the earliest date in each window).
@@ -366,12 +382,12 @@ def compute_alerts(records, defect_types, params):
     return crit + recu
 
 # ---------------------------------------------------------------------------
-# R7 – Monthly summary (per-line)
+# R7 -- Monthly summary (per-line)
 # "defect rate and scrap rate per line (same definitions as R1 and R2,
 #  over the month)"
 # "total CNQ, per line and overall"
-# "trend versus the previous month, per line: ↑ if the defect rate
-#  increased by more than 0.5 points, ↓ if it decreased by more than
+# "trend versus the previous month, per line: up if the defect rate
+#  increased by more than 0.5 points, down if it decreased by more than
 #  0.5 points, otherwise 'stable'"
 # See A3 for records on zero-production days.
 # ---------------------------------------------------------------------------
@@ -389,7 +405,8 @@ def compute_monthly_lines(records, prod, defect_types, parts, params):
     for (d, line), qty in prod.items():
         prod_mo[(d.year, d.month, line)] += qty
 
-    # R7 = R1 over the month: ALL dispositions count as defects (A3: no day filter)
+    # R7 uses same definitions as R1 over the month: ALL dispositions count.
+    # A3: no day-level filter.
     for rec in records:
         key = (rec["date"].year, rec["date"].month, rec["line"])
         defect_mo[key] += rec["qty"]
@@ -408,7 +425,7 @@ def compute_monthly_lines(records, prod, defect_types, parts, params):
         cq = cnq_mo.get(key, 0.0)
         tx_def   = nd / p * 100
         tx_rebut = rb / p * 100
-        # Trend: compare to previous calendar month (R7 says "previous month")
+        # R7: "trend versus the previous month"
         prev_key = (yr, mo - 1, line) if mo > 1 else (yr - 1, 12, line)
         if prev_key in prev_tx:
             diff = tx_def - prev_tx[prev_key]
@@ -436,7 +453,7 @@ def compute_monthly_lines(records, prod, defect_types, parts, params):
     return rows
 
 # ---------------------------------------------------------------------------
-# R7 – Monthly global summary
+# R7 -- Monthly global summary
 # "total quantity produced and total defective quantity"
 # "total CNQ, per line and overall"
 # "top 3 defect types by quantity"
@@ -510,6 +527,64 @@ def _f2(x):
     return f"{float(x):.2f}"
 
 # ---------------------------------------------------------------------------
+# Tagging helpers
+# Returns the correct divergence ID(s) for each RAP_HEBDO and MENS_LIGNES
+# field, given the production line.
+#
+# D1 (L4 qty halved) -- only affects L4 nb_def and tx_def (never rebut,
+#   tx_rebut, or cnq_eur because rb uses full qty and CoutNC is unaffected).
+# D4 (ACCEPT excluded monthly) -- affects monthly defauts and tx_def for
+#   any line that has ACCEPT records; never affects rebut, tx_rebut, or
+#   cnq_eur (ACCEPT costs are 0 per R4).
+# D6 (zero-prod-day records excluded) -- affects any line with such records.
+#   Only confirmed instance in this dataset: NC-0040 L2 2026-06-17 (REWORK,
+#   D02, qty=2), which affects L2 nb_def, tx_def, cnq_eur.
+#   rebut/tx_rebut are NOT affected because NC-0040 is REWORK, not SCRAP.
+# ---------------------------------------------------------------------------
+def _wk_nb_def_tag(line):
+    """Tag for weekly nb_def / tx_def."""
+    if line == "L4":
+        return "D1"
+    return "D6"   # only non-L4 mismatch is L2 caused by D6
+
+def _wk_rebut_tag():
+    """Tag for weekly rebut / tx_rebut.
+    D1 never affects rebut (VBA uses full qty).
+    D6 would only affect rebut if a zero-prod-day record were SCRAP;
+    NC-0040 is REWORK, so no rebut mismatch is expected.
+    Kept as D6 for correctness should such a record exist."""
+    return "D6"
+
+def _wk_cnq_tag(line):
+    """Tag for weekly cnq_eur.
+    D1 does not affect CNQ (CoutNC uses full qty regardless of line).
+    Only D6 causes a weekly CNQ mismatch (NC-0040 excluded)."""
+    return "D6"
+
+def _mo_defauts_tag(line):
+    """Tag for monthly defauts / tx_def.
+    L4: D1 (halving) + D4 (ACCEPT exclusion).
+    L2: D4 (ACCEPT exclusion) + D6 (zero-prod-day NC-0040).
+    L1, L3: D4 only (ACCEPT exclusion; no zero-prod records on these lines)."""
+    if line == "L4":
+        return "D1+D4"
+    if line == "L2":
+        return "D4+D6"
+    return "D4"   # L1, L3
+
+def _mo_cnq_tag():
+    """Tag for monthly cnq_eur.
+    D1 does not affect CNQ.
+    D4 does not affect CNQ (ACCEPT costs are 0 per R4).
+    Only D6 affects CNQ (NC-0040 REWORK excluded)."""
+    return "D6"
+
+def _mo_tendance_tag(line):
+    """Tag for monthly tendance.
+    Trend is derived from tx_def, so cascades from the same divergences."""
+    return _mo_defauts_tag(line)
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -520,7 +595,7 @@ def main():
     prod         = load_production_log()
 
     print("=" * 70)
-    print("rules_check.py v3 -- R1-R7 vs sorties_legacy/")
+    print("rules_check.py v4 -- R1-R7 vs sorties_legacy/")
     print("=" * 70)
     print("\nParameters (from data/parameters.csv):")
     for k, v in params.items():
@@ -542,17 +617,29 @@ def main():
     for key in sorted(rule_h):
         rr = rule_h[key]
         lr = leg_h.get(key)
+        line = key[1]
         if lr is None:
             _tag({"section": "RAP_HEBDO", "key": key, "field": "row",
                   "rule_says": "present", "legacy_has": "MISSING"}, "?")
             continue
-        lbl = f"RAP_HEBDO {key[0]} {key[1]}"
-        check(lbl, key, "nb_def",   rr["nb_def"],  lr["nb_def"],   "D1")
-        check(lbl, key, "tx_def",   _f2(rr["tx_def"]),   _f2(float(lr["tx_def"])),   "D1")
-        check(lbl, key, "rebut",    rr["rebut"],   lr["rebut"],    "D1")
-        check(lbl, key, "tx_rebut", _f2(rr["tx_rebut"]), _f2(float(lr["tx_rebut"])), "D1")
+        lbl = f"RAP_HEBDO {key[0]} {line}"
+        # nb_def / tx_def: D1 for L4 (qty halved); D6 for other lines
+        #   (only non-L4 mismatch is L2 W25 caused by NC-0040 on zero-prod day)
+        check(lbl, key, "nb_def",   rr["nb_def"],  lr["nb_def"],
+              _wk_nb_def_tag(line))
+        check(lbl, key, "tx_def",   _f2(rr["tx_def"]),   _f2(float(lr["tx_def"])),
+              _wk_nb_def_tag(line))
+        # rebut / tx_rebut: D1 never affects rebut; D6 could only if a SCRAP
+        #   record were excluded (NC-0040 is REWORK, so no mismatch expected)
+        check(lbl, key, "rebut",    rr["rebut"],   lr["rebut"],
+              _wk_rebut_tag())
+        check(lbl, key, "tx_rebut", _f2(rr["tx_rebut"]), _f2(float(lr["tx_rebut"])),
+              _wk_rebut_tag())
+        # statut: D2 (threshold >= 3 vs > 3)
         check(lbl, key, "statut",   rr["statut"],  lr["statut"],   "D2")
-        check(lbl, key, "cnq_eur",  rr["cnq_eur"], lr["cnq_eur"],  "D1")
+        # cnq_eur: D1 does not affect CNQ; D6 excludes NC-0040 REWORK
+        check(lbl, key, "cnq_eur",  rr["cnq_eur"], lr["cnq_eur"],
+              _wk_cnq_tag(line))
     for key in sorted(leg_h):
         if key not in rule_h:
             _tag({"section": "RAP_HEBDO", "key": key, "field": "row",
@@ -575,6 +662,7 @@ def main():
                   "rule_says": "present", "legacy_has": "MISSING"}, "D5")
             continue
         lbl = f"PARETO {key[0]} rank {key[1]}"
+        # All Pareto field mismatches are caused by D5 (Sun-Sat vs ISO Mon-Sun)
         check(lbl, key, "code",        rr["code"],      lr["code"],           "D5")
         check(lbl, key, "qte",         rr["qte"],       lr["qte"],            "D5")
         check(lbl, key, "pct",         _f2(rr["pct"]),  _f2(float(lr["pct"])), "D5")
@@ -597,30 +685,34 @@ def main():
     rule_crit = {r["id"]: r for r in rule_alerts   if r["type"] == "CRITICAL"}
     rule_recu = {r["id"]: r for r in rule_alerts   if r["type"] == "RECURRENCE"}
 
+    # R5: alerts in rule but not legacy => legacy missed a CRITICAL
     for id_ in sorted(rule_crit):
         if id_ not in leg_crit:
             r = rule_crit[id_]
             _tag({"section": "ALERTES/CRITIQUE", "key": id_, "field": "presence",
                   "rule_says": f"CRITICAL ({r['code']} qty={r['qte']})",
-                  "legacy_has": "ABSENT"}, "D-new")
+                  "legacy_has": "ABSENT"}, "D5-alert")
+    # R5: alerts in legacy but not rule => legacy has a spurious CRITICAL
     for id_ in sorted(leg_crit):
         if id_ not in rule_crit:
             lr = leg_crit[id_]
             _tag({"section": "ALERTES/CRITIQUE", "key": id_, "field": "presence",
                   "rule_says": "not CRITICAL",
-                  "legacy_has": f"CRITIQUE ({lr['code']} qty={lr['qte']})"}, "D-new")
+                  "legacy_has": f"CRITIQUE ({lr['code']} qty={lr['qte']})"}, "D5-alert")
 
     def _recu_sig(r):
         return (r.get("ligne"), r.get("piece"), r.get("code"))
 
     rule_rsigs = {_recu_sig(r) for r in rule_recu.values()}
     leg_rsigs  = {_recu_sig(r) for r in leg_recu.values()}
+    # R6: recurrence flags in rule but not legacy
     for k in sorted(rule_rsigs - leg_rsigs):
         _tag({"section": "ALERTES/RECURRENCE", "key": k, "field": "presence",
-              "rule_says": "flag expected", "legacy_has": "ABSENT"}, "D7")
+              "rule_says": "flag expected", "legacy_has": "ABSENT"}, "D8")
+    # R6: recurrence flags in legacy but not rule
     for k in sorted(leg_rsigs - rule_rsigs):
         _tag({"section": "ALERTES/RECURRENCE", "key": k, "field": "presence",
-              "rule_says": "no flag", "legacy_has": "present"}, "D7")
+              "rule_says": "no flag", "legacy_has": "present"}, "D8")
 
     # ------------------------------------------------------------------ #
     # MENS_LIGNES  (R7)                                                  #
@@ -634,18 +726,28 @@ def main():
     for key in sorted(rule_ml):
         rr = rule_ml[key]
         lr = leg_ml.get(key)
+        line = key[1]
         if lr is None:
             _tag({"section": "MENS_LIGNES", "key": key, "field": "row",
                   "rule_says": "present", "legacy_has": "MISSING"}, "?")
             continue
-        lbl = f"MENS_LIGNES {key[0]} {key[1]}"
-        check(lbl, key, "defauts",  rr["defauts"],  lr["defauts"],  "D1+D4")
-        check(lbl, key, "tx_def",   _f2(rr["tx_def"]),  _f2(float(lr["tx_def"])),  "D1+D4")
-        check(lbl, key, "rebut",    rr["rebut"],    lr["rebut"],    "D1")
-        check(lbl, key, "tx_rebut", _f2(rr["tx_rebut"]), _f2(float(lr["tx_rebut"])), "D1")
+        lbl = f"MENS_LIGNES {key[0]} {line}"
+        # defauts / tx_def: D1 (L4 only) + D4 (all lines with ACCEPT) + D6 (L2)
+        check(lbl, key, "defauts",  rr["defauts"],  lr["defauts"],
+              _mo_defauts_tag(line))
+        check(lbl, key, "tx_def",   _f2(rr["tx_def"]),  _f2(float(lr["tx_def"])),
+              _mo_defauts_tag(line))
+        # rebut / tx_rebut: D1 never affects rebut; D6 would only if a SCRAP
+        #   record were excluded (NC-0040 is REWORK -- no mismatch expected)
+        check(lbl, key, "rebut",    rr["rebut"],    lr["rebut"],    _wk_rebut_tag())
+        check(lbl, key, "tx_rebut", _f2(rr["tx_rebut"]), _f2(float(lr["tx_rebut"])),
+              _wk_rebut_tag())
+        # statut: D2
         check(lbl, key, "statut",   rr["statut"],   lr["statut"],   "D2")
-        check(lbl, key, "cnq_eur",  rr["cnq_eur"],  lr["cnq_eur"],  "D1+D4")
-        check(lbl, key, "tendance", rr["tendance"], lr["tendance"], "D1+D4")
+        # cnq_eur: D1/D4 do not affect CNQ; only D6 does (NC-0040 REWORK excluded)
+        check(lbl, key, "cnq_eur",  rr["cnq_eur"],  lr["cnq_eur"],  _mo_cnq_tag())
+        # tendance: cascades from tx_def
+        check(lbl, key, "tendance", rr["tendance"], lr["tendance"], _mo_tendance_tag(line))
 
     # ------------------------------------------------------------------ #
     # MENS_GLOBAL  (R7)                                                  #
@@ -664,12 +766,21 @@ def main():
                   "rule_says": "present", "legacy_has": "MISSING"}, "?")
             continue
         lbl = f"MENS_GLOBAL {key}"
+        # produit: should always match (production_log is not affected by any bug)
         check(lbl, key, "produit",        rr["produit"],       lr["produit"],       "?")
-        check(lbl, key, "defauts",        rr["defauts"],       lr["defauts"],       "D1+D4")
-        check(lbl, key, "cnq_eur",        rr["cnq_eur"],       lr["cnq_eur"],       "D1+D4")
-        check(lbl, key, "top3",           rr["top3"],          lr["top3"],          "D1+D4")
+        # defauts: D1 (L4 halving) + D4 (ACCEPT exclusion) + D6 (zero-prod exclusion)
+        check(lbl, key, "defauts",        rr["defauts"],       lr["defauts"],
+              "D1+D4+D6")
+        # cnq_eur: only D6 (NC-0040 excluded); D1/D4 do not affect CNQ
+        check(lbl, key, "cnq_eur",        rr["cnq_eur"],       lr["cnq_eur"],
+              "D6")
+        # top3: tq_mo in VBA uses all records (including zero-prod-day records),
+        #   so NC-0040 is present in both legacy and rule top3 totals.
+        #   D1 and D4 do not affect tq_mo. No top3 mismatch expected.
+        check(lbl, key, "top3",           rr["top3"],          lr["top3"],          "D6")
+        # nb_critiques/nb_recurrences: D7/D8 (no mismatch on current data)
         check(lbl, key, "nb_critiques",   rr["nb_critiques"],  lr["nb_critiques"],  "D7")
-        check(lbl, key, "nb_recurrences", rr["nb_recurrences"], lr["nb_recurrences"], "D7")
+        check(lbl, key, "nb_recurrences", rr["nb_recurrences"], lr["nb_recurrences"], "D8")
 
     # ------------------------------------------------------------------ #
     # Print results                                                       #
@@ -687,7 +798,7 @@ def main():
     print(f"\nTotal mismatches: {len(MISMATCHES)}\n")
     for div_id in sorted(by_div):
         grp = by_div[div_id]
-        print(f"\n[{div_id}] — {len(grp)} mismatch(es)")
+        print(f"\n[{div_id}] -- {len(grp)} mismatch(es)")
         for m in grp:
             print(f"  {m['section']}  key={m['key']}  field={m['field']}")
             print(f"    rule  : {m['rule_says']}")
@@ -695,11 +806,11 @@ def main():
 
     # Summary count table
     print("\n--- SUMMARY: mismatches per divergence row ---")
-    print(f"  {'Div':<8} {'Count':>5}")
-    print(f"  {'-'*8} {'-'*5}")
+    print(f"  {'Div':<10} {'Count':>5}")
+    print(f"  {'-'*10} {'-'*5}")
     for div_id in sorted(by_div):
-        print(f"  {div_id:<8} {len(by_div[div_id]):>5}")
-    print(f"  {'TOTAL':<8} {len(MISMATCHES):>5}")
+        print(f"  {div_id:<10} {len(by_div[div_id]):>5}")
+    print(f"  {'TOTAL':<10} {len(MISMATCHES):>5}")
 
     # CSV dump
     print("\n--- MISMATCH CSV ---")
