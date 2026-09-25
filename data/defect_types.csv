@@ -1,0 +1,9 @@
+code,label,base_severity,rework_hours_per_part
+D01,Surface scratch,MINOR,0.25
+D02,Dent,MINOR,0.5
+D03,Missing fastener,MAJOR,0.5
+D04,Wrong torque,MAJOR,0.25
+D05,Dimensional out of tolerance,MAJOR,1.5
+D06,Delamination,CRITICAL,
+D07,Contamination (FOD),CRITICAL,1.0
+D08,Label / marking error,MINOR,0.1

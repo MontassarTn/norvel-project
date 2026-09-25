@@ -1,0 +1,20 @@
+type,id,date,ligne,piece,code,qte,message
+CRITIQUE,NC-0017,2026-06-05,L4,P-2001,D06,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0024,2026-06-09,L2,P-2001,D06,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0031,2026-06-14,L4,P-2002,D07,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0034,2026-06-15,L1,P-1001,D07,3,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0036,2026-06-15,L4,P-2001,D06,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0045,2026-06-21,L4,P-2002,D06,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0060,2026-06-26,L3,P-3001,D06,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0074,2026-07-01,L3,P-3001,D06,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0086,2026-07-06,L3,P-3001,D06,6,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0096,2026-07-08,L3,P-3001,D06,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0102,2026-07-09,L4,P-2001,D07,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0108,2026-07-10,L3,P-1001,D06,5,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0114,2026-07-13,L4,P-2001,D07,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0120,2026-07-14,L4,P-2001,D05,21,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0127,2026-07-16,L2,P-2002,D07,2,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0131,2026-07-18,L4,P-2001,D06,6,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0132,2026-07-18,L4,P-2002,D07,1,defaut critique - prevenir resp. qualite
+CRITIQUE,NC-0137,2026-07-21,L1,P-1001,D07,1,defaut critique - prevenir resp. qualite
+RECURRENCE,NC-0085,2026-07-06,L2,P-2001,D03,3,recurrence 7j - ouvrir 8D

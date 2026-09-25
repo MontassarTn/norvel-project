@@ -1,0 +1,8 @@
+parameter,value
+scrap_threshold_red_pct,3.0
+scrap_threshold_orange_pct,2.0
+rework_rate_eur_per_hour,45
+severity_escalation_qty,20
+recurrence_min_count,3
+recurrence_window_days,7
+trend_stable_band_pts,0.5

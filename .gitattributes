@@ -1,0 +1,9 @@
+# Default: normalise line endings for text files
+* text=auto
+
+# Frozen legacy reference: stored byte-for-byte, line endings never converted
+# (keeps the legacy files and the golden master identical to what the macro used and produced)
+data/** -text
+legacy_vba/** -text
+sorties_legacy/** -text
+*.xlsm binary
