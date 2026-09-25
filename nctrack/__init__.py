@@ -1,1 +1,1 @@
-"Non-conformance tracker — Python package (v1-parity: legacy mode only)."
+"Non-conformance tracker — Python package (legacy mode + corrected mode, D1–D9)."

@@ -2,9 +2,11 @@
 mens_global — Monthly global summary (CalcMensuel → MENS_GLOBAL equivalent).
 
 Legacy divergences reproduced when active in cfg:
-  D1  L4 defect qty halved in nd accumulator (via shared accumulators)
+  D1  L4 defect qty multiplied by d1_l4_factor (legacy: 0.5, corrected: 1.0)
   D4  ACCEPT excluded from monthly nd accumulator
   D6  records on zero-production days silently skipped
+  D7  thresholds hardcoded instead of read from parameters.csv
+  D9  CNQ rounded per record (legacy CLng) vs rounding only the final total
 
 Output columns:
   mois,produit,defauts,cnq_eur,top3,nb_critiques,nb_recurrences
@@ -13,7 +15,6 @@ Output columns:
 from __future__ import annotations
 
 import datetime
-import math
 from collections import defaultdict
 from typing import Any
 
@@ -25,12 +26,12 @@ def _month_label(d: datetime.date) -> str:
     return f"{d.year}-{d.month:02d}"
 
 
-def _cost_nc(
+def _cost_nc_exact(
     row: dict[str, str],
     ds: Dataset,
     labour_rate: float,
-) -> int:
-    """Cost of one defect record (per-record banker's rounding, matching VBA CLng)."""
+) -> float:
+    """Exact (unrounded) cost of one defect record."""
     qty = float(row["qty"])
     code = row["defect_code"]
     disposition = row["disposition"]
@@ -38,13 +39,22 @@ def _cost_nc(
     part_cost = ds.parts_map.get(part_ref, 0.0)
     defect_info = ds.defect_map.get(code, {})
     if disposition == "SCRAP":
-        return round(qty * part_cost)
+        return qty * part_cost
     if disposition == "REWORK":
         if code == "D06":
-            return round(qty * part_cost)
+            return qty * part_cost
         hours = defect_info.get("rework_hours") or 0.0
-        return round(qty * hours * labour_rate)
-    return 0
+        return qty * hours * labour_rate
+    return 0.0
+
+
+def _cost_nc_rounded(
+    row: dict[str, str],
+    ds: Dataset,
+    labour_rate: float,
+) -> int:
+    """Per-record rounded cost (VBA CLng behaviour, D9 on)."""
+    return round(_cost_nc_exact(row, ds, labour_rate))
 
 
 def compute(
@@ -95,11 +105,15 @@ def compute(
         # D4: ACCEPT excluded from monthly nd
         if not (cfg.d4_accept_excluded_monthly and disposition == "ACCEPT"):
             if cfg.d1_l4_halving and line == "L4":
-                nd[m] += qty / 2.0
+                nd[m] += qty * cfg.d1_l4_factor
             else:
                 nd[m] += qty
 
-        cq[m] += _cost_nc(row, ds, labour_rate)
+        # D9: per-record rounding (legacy) vs exact accumulation (corrected)
+        if cfg.d9_round_per_record:
+            cq[m] += _cost_nc_rounded(row, ds, labour_rate)
+        else:
+            cq[m] += _cost_nc_exact(row, ds, labour_rate)
 
         # tq: all dispositions contribute to top3 ranking
         tq[(m, code)] += qty
@@ -137,7 +151,7 @@ def compute(
                 "mois": m,
                 "produit": int(p),
                 "defauts": n,
-                "cnq_eur": cq[m],
+                "cnq_eur": round(cq[m]),  # D9: round the final total
                 "top3": top3,
                 "nb_critiques": crit_count.get(m, 0),
                 "nb_recurrences": recur_count.get(m, 0),

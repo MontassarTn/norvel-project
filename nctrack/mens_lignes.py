@@ -2,9 +2,11 @@
 mens_lignes — Monthly per-line report (CalcMensuel → MENS_LIGNES equivalent).
 
 Legacy divergences reproduced when active in cfg:
-  D1  L4 defect qty halved in nd accumulator
+  D1  L4 defect qty multiplied by d1_l4_factor (legacy: 0.5, corrected: 1.0)
   D4  ACCEPT excluded from monthly nd accumulator
   D6  records on zero-production days silently skipped
+  D7  thresholds hardcoded instead of read from parameters.csv
+  D9  CNQ rounded per record (legacy CLng) vs rounding only the final total
 
 Output columns:
   mois,ligne,produit,defauts,tx_def,rebut,tx_rebut,statut,cnq_eur,tendance
@@ -13,7 +15,6 @@ Output columns:
 from __future__ import annotations
 
 import datetime
-import math
 from collections import defaultdict
 from typing import Any
 
@@ -25,12 +26,12 @@ def _month_label(d: datetime.date) -> str:
     return f"{d.year}-{d.month:02d}"
 
 
-def _cost_nc(
+def _cost_nc_exact(
     row: dict[str, str],
     ds: Dataset,
     labour_rate: float,
-) -> int:
-    """Cost of one defect record (per-record banker's rounding, matching VBA CLng)."""
+) -> float:
+    """Exact (unrounded) cost of one defect record."""
     qty = float(row["qty"])
     code = row["defect_code"]
     disposition = row["disposition"]
@@ -38,13 +39,22 @@ def _cost_nc(
     part_cost = ds.parts_map.get(part_ref, 0.0)
     defect_info = ds.defect_map.get(code, {})
     if disposition == "SCRAP":
-        return round(qty * part_cost)
+        return qty * part_cost
     if disposition == "REWORK":
         if code == "D06":
-            return round(qty * part_cost)
+            return qty * part_cost
         hours = defect_info.get("rework_hours") or 0.0
-        return round(qty * hours * labour_rate)
-    return 0
+        return qty * hours * labour_rate
+    return 0.0
+
+
+def _cost_nc_rounded(
+    row: dict[str, str],
+    ds: Dataset,
+    labour_rate: float,
+) -> int:
+    """Per-record rounded cost (VBA CLng behaviour, D9 on)."""
+    return round(_cost_nc_exact(row, ds, labour_rate))
 
 
 def compute(
@@ -107,16 +117,20 @@ def compute(
 
         # D4: ACCEPT excluded from monthly nd
         if not (cfg.d4_accept_excluded_monthly and disposition == "ACCEPT"):
-            # D1: L4 defect qty halved
+            # D1: L4 defect qty multiplied by factor (0.5 in legacy, 1.0 in corrected)
             if cfg.d1_l4_halving and line == "L4":
-                nd[key] += qty / 2.0
+                nd[key] += qty * cfg.d1_l4_factor
             else:
                 nd[key] += qty
 
         if disposition == "SCRAP":
             rb[key] += qty
 
-        cq[key] += _cost_nc(row, ds, labour_rate)
+        # D9: per-record rounding (legacy) vs exact accumulation (corrected)
+        if cfg.d9_round_per_record:
+            cq[key] += _cost_nc_rounded(row, ds, labour_rate)
+        else:
+            cq[key] += _cost_nc_exact(row, ds, labour_rate)
 
     # Collect ordered months and lines
     all_months = sorted({m for m, _ in prod})
@@ -173,7 +187,7 @@ def compute(
                     "rebut": int(r),
                     "tx_rebut": tx_rebut,
                     "statut": statut,
-                    "cnq_eur": cq.get(key, 0),
+                    "cnq_eur": round(cq.get(key, 0)),  # D9: round the final total
                     "tendance": tendance,
                 }
             )

@@ -2,9 +2,11 @@
 rap_hebdo — Weekly report (CalcHebdo equivalent).
 
 Legacy divergences reproduced when active in cfg:
-  D1  L4 defect qty halved in nd accumulator
+  D1  L4 defect qty multiplied by d1_l4_factor (legacy: 0.5, corrected: 1.0)
   D2  tx_rebut >= 3 → ROUGE  (vs strict > 3)
   D6  records on zero-production days silently skipped
+  D7  thresholds hardcoded instead of read from parameters.csv
+  D9  CNQ rounded per record (legacy CLng) vs rounding only the final total
 
 Output columns:
   semaine,ligne,produit,nb_def,tx_def,rebut,tx_rebut,statut,cnq_eur
@@ -13,7 +15,6 @@ Output columns:
 from __future__ import annotations
 
 import datetime
-import math
 from collections import defaultdict
 from typing import Any
 
@@ -41,16 +42,15 @@ def _week_label(date: datetime.date) -> str:
     return f"{y}-W{w:02d}"
 
 
-def _cost_nc(
+def _cost_nc_exact(
     row: dict[str, str],
     ds: Dataset,
     labour_rate: float,
-) -> int:
-    """Cost of one defect record (CoutNC equivalent).
+) -> float:
+    """Exact (unrounded) cost of one defect record.
 
-    The VBA accumulates costs as Long integers, converting each CoutNC result
-    via CLng() (banker's rounding) before adding to the accumulator.
-    Python round() uses the same banker's rounding convention.
+    Used in corrected mode (D9 off): costs are accumulated as floats and
+    only the final total is rounded.
     """
     qty = float(row["qty"])
     code = row["defect_code"]
@@ -61,15 +61,27 @@ def _cost_nc(
     defect_info = ds.defect_map.get(code, {})
 
     if disposition == "SCRAP":
-        return round(qty * part_cost)
+        return qty * part_cost
     if disposition == "REWORK":
         if code == "D06":
-            # delamination rework is costed as scrap (VBA + rule agree)
-            return round(qty * part_cost)
+            return qty * part_cost
         hours = defect_info.get("rework_hours") or 0.0
-        return round(qty * hours * labour_rate)
+        return qty * hours * labour_rate
     # ACCEPT → 0
-    return 0
+    return 0.0
+
+
+def _cost_nc_rounded(
+    row: dict[str, str],
+    ds: Dataset,
+    labour_rate: float,
+) -> int:
+    """Per-record rounded cost (VBA CLng behaviour).
+
+    Used in legacy mode (D9 on): each record's cost is banker's-rounded to a
+    whole euro before accumulation.
+    """
+    return round(_cost_nc_exact(row, ds, labour_rate))
 
 
 # ---------------------------------------------------------------------------
@@ -122,16 +134,20 @@ def compute(ds: Dataset, cfg: Config) -> list[dict[str, Any]]:
         qty = float(row["qty"])
         key = (wlabel, line)
 
-        # D1: L4 defect qty halved
+        # D1: L4 defect qty multiplied by factor (0.5 in legacy, 1.0 in corrected)
         if cfg.d1_l4_halving and line == "L4":
-            nd[key] += qty / 2.0
+            nd[key] += qty * cfg.d1_l4_factor
         else:
             nd[key] += qty
 
         if row["disposition"] == "SCRAP":
             rb[key] += qty  # scrap always uses full qty
 
-        cq[key] += _cost_nc(row, ds, labour_rate)
+        # D9: per-record rounding (legacy) vs exact accumulation (corrected)
+        if cfg.d9_round_per_record:
+            cq[key] += _cost_nc_rounded(row, ds, labour_rate)
+        else:
+            cq[key] += _cost_nc_exact(row, ds, labour_rate)
 
     # Pass 3 — build output rows, sorted by week then line
     rows: list[dict[str, Any]] = []
@@ -171,7 +187,7 @@ def compute(ds: Dataset, cfg: Config) -> list[dict[str, Any]]:
                 "rebut": int(r),
                 "tx_rebut": tx_rebut,
                 "statut": statut,
-                "cnq_eur": cq[key],
+                "cnq_eur": round(cq[key]),  # D9: round the final total
             }
         )
     return rows
