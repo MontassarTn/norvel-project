@@ -6,6 +6,8 @@ This project shows a repeatable workflow, run with **IBM Bob 2.0**, that moderni
 
 It is demonstrated on the *NC Tracker* of Norvel Composites, a non-conformance tracker written in Excel VBA (2009–2013), rebuilt as a tested Python package with a Streamlit + SQLite app.
 
+**Live app:** https://norvel-project-brssjw3ji76l6mcfmwzdge.streamlit.app
+
 > Norvel Composites is fictional. The legacy tool, its data and the business rules are synthetic, built for the IBM Bob 2.0 hackathon to reproduce a typical factory quality tool. Its deviations from the procedure were planted on purpose, so the discovery could be measured.
 
 ## The workflow
