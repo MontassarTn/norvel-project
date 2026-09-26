@@ -2,8 +2,9 @@
 NCTrack Streamlit application.
 
 At startup:
-  - Loads CSVs from data/ into an in-memory SQLite database (nctrack.db, recreated).
-  - Computes all five reports via the nctrack package.
+  - Loads the CSVs from data/ into a SQLite database (nctrack.db, recreated
+    once per server start, not committed).
+  - Computes all five reports from that database via the nctrack package.
 
 Pages (via sidebar navigation):
   1. Weekly Report   – rap_hebdo
@@ -20,7 +21,6 @@ Each table has a CSV download button.
 from __future__ import annotations
 
 import io
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ import streamlit as st
 from nctrack import alertes, mens_global, mens_lignes, pareto, rap_hebdo
 from nctrack.config import CorrectedConfig, LegacyConfig
 from nctrack.diff import DECISION_DESCRIPTIONS, report_differences
-from nctrack.loader import Dataset, load
+from nctrack.db import build_database, load_database
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -45,52 +45,15 @@ STATUS_COLOURS = {
 }
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database
 # ---------------------------------------------------------------------------
 
 
-def _load_csv_to_sqlite(db: sqlite3.Connection) -> None:
-    """Load all five CSVs from DATA_DIR into the SQLite database."""
-    import csv
-
-    tables = [
-        "defect_log",
-        "production_log",
-        "defect_types",
-        "parts",
-        "parameters",
-    ]
-    for table in tables:
-        path = DATA_DIR / f"{table}.csv"
-        with open(path, newline="", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            rows = list(reader)
-        if not rows:
-            continue
-        cols = list(rows[0].keys())
-        col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
-        db.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({col_defs})')
-        placeholders = ", ".join("?" for _ in cols)
-        db.executemany(
-            f'INSERT INTO "{table}" VALUES ({placeholders})',
-            [[r[c] for c in cols] for r in rows],
-        )
-    db.commit()
-
-
-def _build_db() -> sqlite3.Connection:
-    """Recreate nctrack.db and load all CSVs into it."""
-    db = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    db.execute("PRAGMA journal_mode=WAL")
-    # Drop all existing tables so each run starts fresh
-    tables = db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()
-    for (t,) in tables:
-        db.execute(f'DROP TABLE IF EXISTS "{t}"')
-    db.commit()
-    _load_csv_to_sqlite(db)
-    return db
+@st.cache_resource(show_spinner="Loading data into SQLite…")
+def _database() -> str:
+    """Recreate nctrack.db from data/ once per server process; return its path."""
+    build_database(DATA_DIR, DB_PATH)
+    return str(DB_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +65,7 @@ def _build_db() -> sqlite3.Connection:
 def _compute_all(mode: str) -> dict[str, list[dict[str, Any]]]:
     """Compute all five reports for the given mode ('legacy' or 'corrected')."""
     cfg = LegacyConfig() if mode == "legacy" else CorrectedConfig()
-    ds = load(DATA_DIR)
+    ds = load_database(_database())
     al_rows = alertes.compute(ds, cfg)
     return {
         "rap_hebdo": rap_hebdo.compute(ds, cfg),
@@ -115,7 +78,7 @@ def _compute_all(mode: str) -> dict[str, list[dict[str, Any]]]:
 
 @st.cache_data(show_spinner=False)
 def _compute_diffs() -> list[dict[str, Any]]:
-    ds = load(DATA_DIR)
+    ds = load_database(_database())
     return report_differences(ds)
 
 
@@ -353,12 +316,6 @@ def main() -> None:
         st.sidebar.info("⚙️ Legacy mode: VBA parity")
     else:
         st.sidebar.success("✅ Corrected mode: rule-compliant")
-
-    # --- Initialise DB once per session ---
-    if "db_ready" not in st.session_state:
-        with st.spinner("Loading data into SQLite…"):
-            _build_db()
-        st.session_state["db_ready"] = True
 
     # --- Compute reports ---
     reports = _compute_all(mode)
