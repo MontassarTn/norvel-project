@@ -24,7 +24,11 @@ Open `NCTRACK.xlsm` (saved in the project root, next to `data/`), run macro `LAN
 - [x] Legacy VBA written
 - [x] Run the macro in Excel and confirm `sorties_legacy/` is produced
 - [x] Commit and tag `v0-legacy`
-- [ ] Modernization phase (to be done with IBM Bob for the hackathon demo)
+- [x] Analysis, rules checker and decisions (`docs/LEGACY_ANALYSIS.md`, `tools/rules_check.py`, `docs/DECISIONS.md`)
+- [x] Python port with golden-master tests (tag `v1-parity`)
+- [x] Corrected mode applying the decisions (tag `v2-corrected`)
+- [x] Streamlit + SQLite app (tag `v3-app`)
+- [ ] Deploy the app and submit (video, slides, statements)
 
 ## Target stack for the modern version
 
