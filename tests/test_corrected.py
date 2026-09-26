@@ -20,9 +20,9 @@ from pathlib import Path
 import pytest
 
 from nctrack import alertes, mens_global, mens_lignes, pareto, rap_hebdo
-from nctrack.config import CorrectedConfig, LegacyConfig
+from nctrack.config import L4_FACTOR, CorrectedConfig, LegacyConfig
 from nctrack.diff import report_differences
-from nctrack.loader import load
+from nctrack.loader import Dataset, load
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -122,58 +122,33 @@ def _approx(a, b, tol=0.005):
 
 
 # ===========================================================================
-# D1 — L4 defect qty halved (KEEP with explicit factor 0.5 → corrected = 1.0)
+# D1 — L4 defect qty halved: KEEP, as an explicit parameter
 # Decision: "KEEP the L4 halving, but as an explicit, documented parameter
 #            (L4 factor = 0.5), not a hidden rule."
-# In corrected mode (CorrectedConfig) d1_l4_halving=False, so factor = 1.0.
-# Numbers from DECISIONS.md and cross-checked against rules_check.py v4.
+# Corrected mode applies config.L4_FACTOR = 0.5, so every L4 weekly defect
+# count equals the legacy one; monthly L4 counts change only through D4/D6.
+# Expected values = rules_check.py full quantity × 0.5.
 # ===========================================================================
 
 
-def test_d1_l4_nb_def_w26(rh):
-    """D1: W26 L4 nb_def = 9 (rule); legacy = 4.5.
-    Cross-check vs rules_check.py: D1 mismatch W26 L4 rule=9.0."""
-    row = _rh_row(rh, "2026-W26", "L4")
-    assert row is not None
-    assert row["nb_def"] == 9.0
-
-
-def test_d1_l4_tx_def_w26(rh):
-    """D1: W26 L4 tx_def = 1.18 (rule); legacy = 0.59.
-    Cross-check vs rules_check.py."""
-    row = _rh_row(rh, "2026-W26", "L4")
-    assert row is not None
-    assert _approx(row["tx_def"], 1.18)
-
-
-def test_d1_l4_nb_def_w28(rh):
-    """D1: W28 L4 nb_def = 28 (rule); legacy = 14.
-    Cross-check vs rules_check.py: DECISIONS.md example."""
-    row = _rh_row(rh, "2026-W28", "L4")
-    assert row is not None
-    assert row["nb_def"] == 28.0
-
-
-def test_d1_l4_nb_def_w29(rh):
-    """D1: W29 L4 nb_def = 40 (rule); legacy = 20.
-    Cross-check vs rules_check.py."""
-    row = _rh_row(rh, "2026-W29", "L4")
-    assert row is not None
-    assert row["nb_def"] == 40.0
+def test_d1_factor_is_explicit_parameter(cfg):
+    """D1: corrected mode halves L4 through the documented L4_FACTOR parameter."""
+    assert cfg.d1_l4_halving is True
+    assert cfg.d1_l4_factor == L4_FACTOR == 0.5
 
 
 @pytest.mark.parametrize("semaine,expected_nb_def", [
-    ("2026-W23", 8.0),
-    ("2026-W24", 12.0),
-    ("2026-W25", 4.0),
-    ("2026-W26", 9.0),
-    ("2026-W27", 6.0),
-    ("2026-W28", 28.0),
-    ("2026-W29", 40.0),
-    ("2026-W30", 3.0),
+    ("2026-W23", 4.0),
+    ("2026-W24", 6.0),
+    ("2026-W25", 2.0),
+    ("2026-W26", 4.5),
+    ("2026-W27", 3.0),
+    ("2026-W28", 14.0),
+    ("2026-W29", 20.0),
+    ("2026-W30", 1.5),
 ])
 def test_d1_all_l4_weekly_nb_def(rh, semaine, expected_nb_def):
-    """D1: all L4 weekly nb_def values match rules_check.py expectations."""
+    """D1 KEEP: L4 weekly nb_def = rules_check.py full quantity × 0.5."""
     row = _rh_row(rh, semaine, "L4")
     assert row is not None, f"Missing row {semaine} L4"
     assert row["nb_def"] == expected_nb_def, (
@@ -181,20 +156,30 @@ def test_d1_all_l4_weekly_nb_def(rh, semaine, expected_nb_def):
     )
 
 
+def test_d1_l4_weekly_same_as_legacy(rh, rh_legacy):
+    """D1 KEEP: every L4 weekly nb_def and tx_def equals the legacy value."""
+    for leg in rh_legacy:
+        if leg["ligne"] != "L4":
+            continue
+        cor = _rh_row(rh, leg["semaine"], "L4")
+        assert cor is not None
+        assert cor["nb_def"] == leg["nb_def"]
+        assert _approx(cor["tx_def"], leg["tx_def"])
+
+
 def test_d1_monthly_june_l4_defauts(ml):
-    """D1+D4: June L4 defauts = 34 (rule); legacy = 16.5.
-    Cross-check vs rules_check.py: D1+D4 mismatch 2026-06 L4."""
+    """D1 KEEP + D4: June L4 defauts = 34 × 0.5 = 17
+    (legacy 16.5 also left out the ACCEPT unit)."""
     row = _ml_row(ml, "2026-06", "L4")
     assert row is not None
-    assert row["defauts"] == 34.0
+    assert row["defauts"] == 17.0
 
 
 def test_d1_monthly_july_l4_defauts(ml):
-    """D1+D4: July L4 defauts = 76 (rule); legacy = 35.
-    Cross-check vs rules_check.py."""
+    """D1 KEEP + D4: July L4 defauts = 76 × 0.5 = 38 (legacy 35)."""
     row = _ml_row(ml, "2026-07", "L4")
     assert row is not None
-    assert row["defauts"] == 76.0
+    assert row["defauts"] == 38.0
 
 
 # ===========================================================================
@@ -540,19 +525,19 @@ def test_d9_monthly_global_july_cnq(mg):
 
 
 def test_compound_june_global_defauts(mg):
-    """D1+D4+D6: June global defauts = 160 (rule); legacy = 121.5.
-    Cross-check vs rules_check.py."""
+    """D4+D6 with D1 kept: June global defauts = 160 (rules_check.py, full L4)
+    minus half of L4's 34 = 143; legacy = 121.5."""
     row = _mg_row(mg, "2026-06")
     assert row is not None
-    assert row["defauts"] == 160.0
+    assert row["defauts"] == 143.0
 
 
 def test_compound_july_global_defauts(mg):
-    """D1+D4+D6: July global defauts = 205 (rule); legacy = 143.
-    Cross-check vs rules_check.py."""
+    """D4 with D1 kept: July global defauts = 205 (rules_check.py, full L4)
+    minus half of L4's 76 = 167; legacy = 143."""
     row = _mg_row(mg, "2026-07")
     assert row is not None
-    assert row["defauts"] == 205.0
+    assert row["defauts"] == 167.0
 
 
 # ===========================================================================
@@ -581,11 +566,24 @@ def test_diff_has_required_keys(diffs):
         )
 
 
-def test_diff_d1_present(diffs):
-    """diff: D1 differences are reported for L4 nb_def in rap_hebdo."""
-    d1 = [d for d in diffs if d["decision"] == "D1" and d["report"] == "rap_hebdo"
-          and d["field"] == "nb_def"]
-    assert len(d1) > 0, "No D1/rap_hebdo/nb_def differences found"
+def test_diff_no_d1(diffs):
+    """diff: D1 is KEEP, so no value may be attributed to D1."""
+    assert not [d for d in diffs if "D1" in d["decision"].split("+")]
+
+
+def test_diff_attribution(diffs):
+    """diff: each change is attributed to the decision(s) that cause it."""
+    def decision_of(report, key, field):
+        return next(d["decision"] for d in diffs
+                    if d["report"] == report and d["key"] == key and d["field"] == field)
+
+    # NC-0040 on a zero-production day: nb_def and cnq_eur change through D6 only
+    assert decision_of("rap_hebdo", ("2026-W25", "L2"), "nb_def") == "D6"
+    assert decision_of("rap_hebdo", ("2026-W25", "L2"), "cnq_eur") == "D6"
+    # June L1: 9 ACCEPT units now counted
+    assert decision_of("mens_lignes", ("2026-06", "L1"), "defauts") == "D4"
+    # June global defect count: ACCEPT (D4) and NC-0040 (D6) together
+    assert decision_of("mens_global", "2026-06", "defauts") == "D4+D6"
 
 
 def test_diff_d2_present(diffs):
@@ -599,7 +597,7 @@ def test_diff_d2_present(diffs):
 
 def test_diff_d4_present(diffs):
     """diff: D4 differences are reported for mens_lignes defauts."""
-    d4 = [d for d in diffs if d["decision"] in ("D1", "D4")
+    d4 = [d for d in diffs if "D4" in d["decision"].split("+")
           and d["report"] == "mens_lignes" and d["field"] == "defauts"]
     assert len(d4) > 0
 
@@ -641,7 +639,7 @@ def test_diff_w27_l3_statut_legacy_rouge_corrected_orange(diffs):
 
 
 def test_diff_june_global_defauts_change(diffs):
-    """diff: June global defauts changes from 121.5 to 160.0."""
+    """diff: June global defauts changes from 121.5 to 143.0 (D4+D6, D1 kept)."""
     entry = next(
         (d for d in diffs
          if d["report"] == "mens_global"
@@ -651,4 +649,43 @@ def test_diff_june_global_defauts_change(diffs):
     )
     assert entry is not None
     assert _approx(entry["legacy"], 121.5)
-    assert _approx(entry["corrected"], 160.0)
+    assert _approx(entry["corrected"], 143.0)
+
+
+# ===========================================================================
+# D8 — R6 applies on any production line
+# Decision: "FIX: implement R6 exactly as written, with one flag per
+#            qualifying window."  R6 has no production-line condition.
+# No cross-line repetition exists in data/, so a small synthetic log is used.
+# ===========================================================================
+
+
+def _cross_line_dataset(ds):
+    rows = [
+        {"id": "T-1", "date": "2026-07-06", "line": "L1", "part_ref": "P-1001",
+         "defect_code": "D01", "qty": "1", "disposition": "REWORK",
+         "operator": "T", "comment": ""},
+        {"id": "T-2", "date": "2026-07-08", "line": "L2", "part_ref": "P-1001",
+         "defect_code": "D01", "qty": "1", "disposition": "REWORK",
+         "operator": "T", "comment": ""},
+        {"id": "T-3", "date": "2026-07-10", "line": "L3", "part_ref": "P-1001",
+         "defect_code": "D01", "qty": "1", "disposition": "REWORK",
+         "operator": "T", "comment": ""},
+    ]
+    return Dataset(rows, ds.production_log, ds.defect_types, ds.parts, ds.parameters)
+
+
+def test_d8_recurrence_across_lines_is_flagged(ds, cfg):
+    """D8: same code + same part 3 times in 5 days on three lines -> one flag."""
+    recu = [a for a in alertes.compute(_cross_line_dataset(ds), cfg)
+            if a["type"] == "RECURRENCE"]
+    assert len(recu) == 1
+    assert (recu[0]["id"], recu[0]["piece"], recu[0]["code"], recu[0]["qte"]) == (
+        "T-1", "P-1001", "D01", 3)
+
+
+def test_d8_legacy_misses_cross_line_recurrence(ds, leg_cfg):
+    """D8: the legacy per-line scan does not flag the same repetition."""
+    recu = [a for a in alertes.compute(_cross_line_dataset(ds), leg_cfg)
+            if a["type"] == "RECURRENCE"]
+    assert recu == []

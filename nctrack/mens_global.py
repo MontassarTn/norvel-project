@@ -2,7 +2,7 @@
 mens_global — Monthly global summary (CalcMensuel → MENS_GLOBAL equivalent).
 
 Legacy divergences reproduced when active in cfg:
-  D1  L4 defect qty multiplied by d1_l4_factor (legacy: 0.5, corrected: 1.0)
+  D1  L4 defect qty multiplied by d1_l4_factor (0.5 in both modes: decision D1 = KEEP)
   D4  ACCEPT excluded from monthly nd accumulator
   D6  records on zero-production days silently skipped
   D7  thresholds hardcoded instead of read from parameters.csv

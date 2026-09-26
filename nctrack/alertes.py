@@ -3,8 +3,8 @@ alertes — Alert computation (CalcAlertes equivalent).
 
 Legacy divergences reproduced when active in cfg:
   D7  thresholds hardcoded instead of read from parameters.csv
-  D8  recurrence forward-scan (per-anchor, may duplicate on dense data)
-      vs proper sliding-window (one flag per qualifying window, per R6)
+  D8  recurrence forward-scan per production line (per-anchor, may duplicate
+      on dense data) vs R6 sliding window on any line (one flag per window)
 
 Output columns:
   type,id,date,ligne,piece,code,qte,message
@@ -80,23 +80,31 @@ def _recurrence_sliding(
     """D8 fix: proper sliding-window algorithm (R6).
 
     Emits exactly one RECURRENCE flag per qualifying window, keyed on the
-    earliest occurrence in the window.  Matches rules_check.py compute_alerts.
+    earliest occurrence in the window.
+
+    R6: "the same defect code is recorded on the same part reference 3 or
+    more times within any 7-day window" — occurrences are grouped by
+    (part_ref, defect_code) on any line (decision D8).  The legacy VBA also
+    required the same production line; that condition is not in R6.
+    The reported line is the line of the window's first occurrence.
     """
-    by_triplet: dict[tuple[str, str, str], list[tuple[datetime.date, str]]] = (
+    by_pair: dict[tuple[str, str], list[tuple[datetime.date, str, str]]] = (
         defaultdict(list)
     )
     for rec in defect_log:
-        key = (rec["line"], rec["part_ref"], rec["defect_code"])
-        by_triplet[key].append((datetime.date.fromisoformat(rec["date"]), rec["id"]))
+        key = (rec["part_ref"], rec["defect_code"])
+        by_pair[key].append(
+            (datetime.date.fromisoformat(rec["date"]), rec["id"], rec["line"])
+        )
 
     seen_windows: set[tuple[Any, datetime.date]] = set()
     rows: list[dict[str, Any]] = []
 
-    for key, occurrences in by_triplet.items():
+    for key, occurrences in by_pair.items():
         occurrences.sort()
-        for d_start, id_start in occurrences:
+        for d_start, id_start, line_start in occurrences:
             window_end = d_start + datetime.timedelta(days=recurrence_window_days - 1)
-            count = sum(1 for d2, _ in occurrences if d_start <= d2 <= window_end)
+            count = sum(1 for d2, _, _ in occurrences if d_start <= d2 <= window_end)
             if count >= recurrence_min:
                 wk = (key, d_start)
                 if wk not in seen_windows:
@@ -106,9 +114,9 @@ def _recurrence_sliding(
                             "type": "RECURRENCE",
                             "id": id_start,
                             "date": d_start.isoformat(),
-                            "ligne": key[0],
-                            "piece": key[1],
-                            "code": key[2],
+                            "ligne": line_start,
+                            "piece": key[0],
+                            "code": key[1],
                             "qte": count,
                             "message": _MSG_RECURRENCE,
                         }

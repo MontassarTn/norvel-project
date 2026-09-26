@@ -3,7 +3,14 @@ diff — List every value that differs between legacy mode and corrected mode.
 
 The single public function :func:`report_differences` runs both modes over the
 same dataset and returns a list of dicts describing each diverging field, the
-legacy value, the corrected value, and the decision ID that explains the change.
+legacy value, the corrected value, and the decision(s) that explain the change.
+
+Attribution is computed, not hard-coded: for each decision, the reports are
+recomputed in legacy mode with only that decision's setting switched to its
+corrected value.  A field is attributed to every decision that changes it on
+its own; a field changed by several decisions gets a compound tag such as
+"D4+D6".  A field that only changes when decisions are combined is tagged
+"combined".
 
 This module is intended for use by the application layer ("why did this number
 change?") and by tests that need to cross-check corrected-mode output.
@@ -22,11 +29,12 @@ Usage
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Any
 
 from nctrack import alertes, mens_global, mens_lignes, pareto, rap_hebdo
-from nctrack.config import CorrectedConfig, LegacyConfig
+from nctrack.config import Config, CorrectedConfig, LegacyConfig
 from nctrack.loader import Dataset
 
 
@@ -36,8 +44,8 @@ from nctrack.loader import Dataset
 
 DECISION_DESCRIPTIONS: dict[str, str] = {
     "D1": (
-        "L4 defect qty halved in legacy (factor 0.5). "
-        "FIX: use factor 1.0 — keep halving as explicit parameter per decision."
+        "Legacy halves L4 defect quantities (hidden rule since 2011). "
+        "KEEP: same 0.5 factor in corrected mode, now an explicit, documented parameter."
     ),
     "D2": (
         "Legacy scrap threshold: tx_rebut >= 3 → ROUGE (should be strictly > 3). "
@@ -55,15 +63,30 @@ DECISION_DESCRIPTIONS: dict[str, str] = {
         "Legacy silently skips defect records on zero-production days. "
         "FIX: keep every defect; guard the rate division only when production is zero."
     ),
+    "D7": (
+        "Legacy hard-codes every threshold and never reads parameters.csv. "
+        "FIX: read all thresholds from parameters.csv."
+    ),
     "D8": (
-        "Legacy recurrence uses per-anchor forward scan (may duplicate on dense data). "
-        "FIX: implement R6 exactly, with one flag per qualifying window."
+        "Legacy recurrence: per-anchor forward scan, same production line only. "
+        "FIX: implement R6 exactly (same code + same part on any line), one flag per window."
     ),
     "D9": (
         "Legacy rounds each record's CNQ contribution to whole euros (VBA CLng). "
         "FIX: accumulate exact costs and round only the final totals."
     ),
 }
+
+# Columns that identify a row in each report
+_ROW_KEYS: dict[str, tuple[str, ...]] = {
+    "rap_hebdo": ("semaine", "ligne"),
+    "pareto": ("semaine_du", "rang"),
+    "alertes": ("type", "id"),
+    "mens_lignes": ("mois", "ligne"),
+    "mens_global": ("mois",),
+}
+
+_REPORT_ORDER = list(_ROW_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -80,27 +103,42 @@ def _approx_equal(a: Any, b: Any, abs_tol: float = 0.005) -> bool:
         return str(a) == str(b)
 
 
-def _diff(
-    diffs: list[dict[str, Any]],
-    report: str,
-    key: Any,
-    field: str,
-    legacy: Any,
-    corrected: Any,
-    decision: str,
-) -> None:
-    if not _approx_equal(legacy, corrected):
-        diffs.append(
-            {
-                "report": report,
-                "key": key,
-                "field": field,
-                "legacy": legacy,
-                "corrected": corrected,
-                "decision": decision,
-                "description": DECISION_DESCRIPTIONS.get(decision, ""),
-            }
-        )
+def _run(ds: Dataset, cfg: Config) -> dict[str, list[dict[str, Any]]]:
+    """Compute all five reports for one configuration."""
+    al_rows = alertes.compute(ds, cfg)
+    return {
+        "rap_hebdo": rap_hebdo.compute(ds, cfg),
+        "pareto": pareto.compute(ds, cfg),
+        "alertes": al_rows,
+        "mens_lignes": mens_lignes.compute(ds, cfg, al_rows),
+        "mens_global": mens_global.compute(ds, cfg, al_rows),
+    }
+
+
+def _flatten(reports: dict[str, list[dict[str, Any]]]) -> dict[tuple, Any]:
+    """Map (report, row key, field) → value for every non-key field."""
+    flat: dict[tuple, Any] = {}
+    for report, rows in reports.items():
+        key_cols = _ROW_KEYS[report]
+        for row in rows:
+            key_parts = tuple(str(row[c]) for c in key_cols)
+            key: Any = key_parts[0] if len(key_parts) == 1 else key_parts
+            for field, value in row.items():
+                if field not in key_cols:
+                    flat[(report, key, field)] = value
+    return flat
+
+
+def _changed_fields(base: dict[tuple, Any], other: dict[tuple, Any]) -> set[tuple]:
+    return {
+        k for k in set(base) | set(other)
+        if not _approx_equal(base.get(k), other.get(k))
+    }
+
+
+def _decision_id(field_name: str) -> str:
+    """Config field "d4_accept_excluded_monthly" → decision "D4"."""
+    return field_name.split("_", 1)[0].upper()
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +155,9 @@ def report_differences(ds: Dataset) -> list[dict[str, Any]]:
       report     : str  — output report name ("rap_hebdo", "pareto", etc.)
       key        : any  — row identifier (e.g. ("2026-W26", "L4") or "2026-06")
       field      : str  — column name
-      legacy     : any  — value produced by LegacyConfig()
-      corrected  : any  — value produced by CorrectedConfig()
-      decision   : str  — decision ID that explains the change (D1–D9)
+      legacy     : any  — value produced by LegacyConfig() (None if no such row)
+      corrected  : any  — value produced by CorrectedConfig() (None if no such row)
+      decision   : str  — decision(s) that explain the change, e.g. "D6" or "D4+D6"
       description: str  — human-readable decision summary
 
     Rows are ordered by report, then by key, then by field.
@@ -127,109 +165,40 @@ def report_differences(ds: Dataset) -> list[dict[str, Any]]:
     leg_cfg = LegacyConfig()
     cor_cfg = CorrectedConfig()
 
+    legacy = _flatten(_run(ds, leg_cfg))
+    corrected = _flatten(_run(ds, cor_cfg))
+
+    # Which fields does each decision change on its own?
+    changed_by: dict[str, set[tuple]] = {}
+    for f in dataclasses.fields(Config):
+        leg_value = getattr(leg_cfg, f.name)
+        cor_value = getattr(cor_cfg, f.name)
+        if leg_value == cor_value:
+            continue  # e.g. D1: kept, same setting in both modes
+        variant = dataclasses.replace(leg_cfg, **{f.name: cor_value})
+        changed = _changed_fields(legacy, _flatten(_run(ds, variant)))
+        changed_by.setdefault(_decision_id(f.name), set()).update(changed)
+
+    decisions_in_order = sorted(changed_by, key=lambda d: int(d[1:]))
+
     diffs: list[dict[str, Any]] = []
+    for k in _changed_fields(legacy, corrected):
+        report, key, field = k
+        ids = [d for d in decisions_in_order if k in changed_by[d]]
+        diffs.append(
+            {
+                "report": report,
+                "key": key,
+                "field": field,
+                "legacy": legacy.get(k),
+                "corrected": corrected.get(k),
+                "decision": "+".join(ids) if ids else "combined",
+                "description": (
+                    " | ".join(DECISION_DESCRIPTIONS.get(d, d) for d in ids)
+                    or "Changes only when several decisions apply together."
+                ),
+            }
+        )
 
-    # ------------------------------------------------------------------ #
-    # rap_hebdo                                                           #
-    # ------------------------------------------------------------------ #
-    leg_rh = {(r["semaine"], r["ligne"]): r for r in rap_hebdo.compute(ds, leg_cfg)}
-    cor_rh = {(r["semaine"], r["ligne"]): r for r in rap_hebdo.compute(ds, cor_cfg)}
-
-    for key in sorted(set(leg_rh) | set(cor_rh)):
-        lr = leg_rh.get(key, {})
-        cr = cor_rh.get(key, {})
-        line = key[1]
-
-        # D1: nb_def and tx_def for L4
-        if line == "L4":
-            _diff(diffs, "rap_hebdo", key, "nb_def", lr.get("nb_def"), cr.get("nb_def"), "D1")
-            _diff(diffs, "rap_hebdo", key, "tx_def", lr.get("tx_def"), cr.get("tx_def"), "D1")
-
-        # D2: statut for any row where tx_rebut is exactly at the threshold
-        _diff(diffs, "rap_hebdo", key, "statut", lr.get("statut"), cr.get("statut"), "D2")
-
-        # D6: nb_def, tx_def, cnq_eur for rows affected by zero-prod filter
-        if line != "L4":  # D6 affects non-L4 rows
-            _diff(diffs, "rap_hebdo", key, "nb_def", lr.get("nb_def"), cr.get("nb_def"), "D6")
-            _diff(diffs, "rap_hebdo", key, "tx_def", lr.get("tx_def"), cr.get("tx_def"), "D6")
-
-        # D9: cnq_eur for any row with fractional per-record costs
-        _diff(diffs, "rap_hebdo", key, "cnq_eur", lr.get("cnq_eur"), cr.get("cnq_eur"), "D9")
-
-    # ------------------------------------------------------------------ #
-    # pareto                                                              #
-    # ------------------------------------------------------------------ #
-    leg_pt_rows = pareto.compute(ds, leg_cfg)
-    cor_pt_rows = pareto.compute(ds, cor_cfg)
-    leg_pt = {(r["semaine_du"], str(r["rang"])): r for r in leg_pt_rows}
-    cor_pt = {(r["semaine_du"], str(r["rang"])): r for r in cor_pt_rows}
-
-    for key in sorted(set(leg_pt) | set(cor_pt)):
-        lr = leg_pt.get(key, {})
-        cr = cor_pt.get(key, {})
-        for field in ("code", "qte", "pct", "cumul_pct", "prioritaire"):
-            _diff(diffs, "pareto", key, field, lr.get(field), cr.get(field), "D5")
-
-    # ------------------------------------------------------------------ #
-    # alertes                                                             #
-    # ------------------------------------------------------------------ #
-    leg_al = alertes.compute(ds, leg_cfg)
-    cor_al = alertes.compute(ds, cor_cfg)
-
-    leg_recu = {(a["ligne"], a["piece"], a["code"]): a
-                for a in leg_al if a["type"] == "RECURRENCE"}
-    cor_recu = {(a["ligne"], a["piece"], a["code"]): a
-                for a in cor_al if a["type"] == "RECURRENCE"}
-
-    for key in sorted(set(leg_recu) | set(cor_recu)):
-        lr = leg_recu.get(key, {})
-        cr = cor_recu.get(key, {})
-        _diff(diffs, "alertes", key, "qte", lr.get("qte"), cr.get("qte"), "D8")
-
-    # ------------------------------------------------------------------ #
-    # mens_lignes                                                         #
-    # ------------------------------------------------------------------ #
-    leg_ml = {(r["mois"], r["ligne"]): r
-              for r in mens_lignes.compute(ds, leg_cfg, leg_al)}
-    cor_ml = {(r["mois"], r["ligne"]): r
-              for r in mens_lignes.compute(ds, cor_cfg, cor_al)}
-
-    for key in sorted(set(leg_ml) | set(cor_ml)):
-        lr = leg_ml.get(key, {})
-        cr = cor_ml.get(key, {})
-        line = key[1]
-
-        # D1+D4 compound for L4; D4 for L1/L3; D4+D6 for L2
-        if line == "L4":
-            decision_def = "D1"
-        elif line == "L2":
-            decision_def = "D4"
-        else:
-            decision_def = "D4"
-
-        _diff(diffs, "mens_lignes", key, "defauts",
-              lr.get("defauts"), cr.get("defauts"), decision_def)
-        _diff(diffs, "mens_lignes", key, "tx_def",
-              lr.get("tx_def"), cr.get("tx_def"), decision_def)
-        _diff(diffs, "mens_lignes", key, "statut",
-              lr.get("statut"), cr.get("statut"), "D2")
-        _diff(diffs, "mens_lignes", key, "cnq_eur",
-              lr.get("cnq_eur"), cr.get("cnq_eur"), "D9")
-        _diff(diffs, "mens_lignes", key, "tendance",
-              lr.get("tendance"), cr.get("tendance"), decision_def)
-
-    # ------------------------------------------------------------------ #
-    # mens_global                                                         #
-    # ------------------------------------------------------------------ #
-    leg_mg = {r["mois"]: r for r in mens_global.compute(ds, leg_cfg, leg_al)}
-    cor_mg = {r["mois"]: r for r in mens_global.compute(ds, cor_cfg, cor_al)}
-
-    for key in sorted(set(leg_mg) | set(cor_mg)):
-        lr = leg_mg.get(key, {})
-        cr = cor_mg.get(key, {})
-        _diff(diffs, "mens_global", key, "defauts",
-              lr.get("defauts"), cr.get("defauts"), "D1")
-        _diff(diffs, "mens_global", key, "cnq_eur",
-              lr.get("cnq_eur"), cr.get("cnq_eur"), "D9")
-
+    diffs.sort(key=lambda d: (_REPORT_ORDER.index(d["report"]), str(d["key"]), d["field"]))
     return diffs

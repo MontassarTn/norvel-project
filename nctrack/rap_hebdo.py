@@ -2,7 +2,7 @@
 rap_hebdo — Weekly report (CalcHebdo equivalent).
 
 Legacy divergences reproduced when active in cfg:
-  D1  L4 defect qty multiplied by d1_l4_factor (legacy: 0.5, corrected: 1.0)
+  D1  L4 defect qty multiplied by d1_l4_factor (0.5 in both modes: decision D1 = KEEP)
   D2  tx_rebut >= 3 → ROUGE  (vs strict > 3)
   D6  records on zero-production days silently skipped
   D7  thresholds hardcoded instead of read from parameters.csv
@@ -134,7 +134,7 @@ def compute(ds: Dataset, cfg: Config) -> list[dict[str, Any]]:
         qty = float(row["qty"])
         key = (wlabel, line)
 
-        # D1: L4 defect qty multiplied by factor (0.5 in legacy, 1.0 in corrected)
+        # D1: L4 defect qty multiplied by factor (0.5 in both modes: decision D1 = KEEP)
         if cfg.d1_l4_halving and line == "L4":
             nd[key] += qty * cfg.d1_l4_factor
         else:

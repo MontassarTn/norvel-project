@@ -3,22 +3,22 @@ Configuration for nctrack.
 
 Each divergence between the legacy VBA and the official rules (D1–D9)
 is represented as a flag here.  In *legacy mode* every flag reproduces
-the VBA behaviour exactly.  In *corrected mode* all flags are False
-(the rule-compliant default).
+the VBA behaviour exactly.  In *corrected mode* every flag follows the
+decision recorded in docs/DECISIONS.md.
 
 New parameters (not in data/parameters.csv)
 --------------------------------------------
 L4_FACTOR : float
-    D1 — the factor applied to L4 defective quantity in the legacy path.
-    Set to 0.5 in legacy mode (each L4 part counted as half a defect).
-    The decision: keep the halving as an *explicit, documented parameter*,
-    not a hidden rule; in corrected mode the factor is 1.0 (no adjustment).
+    D1 — the factor applied to L4 defective quantity (0.5: each L4 part
+    counts as half a defect).  Decision D1 is KEEP: the halving stays in
+    corrected mode, but as this explicit, documented parameter instead of
+    a hidden rule in the code.
 
 Usage
 -----
 from nctrack.config import LegacyConfig, CorrectedConfig
 cfg = LegacyConfig()       # all divergences active
-cfg = CorrectedConfig()    # all divergences corrected
+cfg = CorrectedConfig()    # decisions from docs/DECISIONS.md applied
 """
 
 from dataclasses import dataclass, field
@@ -28,16 +28,15 @@ from dataclasses import dataclass, field
 # L4 halving factor — stored here (nctrack config), never in data/parameters.csv
 # ---------------------------------------------------------------------------
 
-L4_FACTOR_LEGACY = 0.5   # D1: legacy VBA behaviour  (ne pas toucher, 2011)
-L4_FACTOR_CORRECTED = 1.0  # D1: corrected (full quantity, per R1)
+L4_FACTOR = 0.5  # D1: KEEP decision — explicit parameter (was hidden in the VBA since 2011)
 
 
 @dataclass
 class Config:
-    # D1 — L4 defect qty halved in weekly AND monthly defect accumulator
-    d1_l4_halving: bool = False
+    # D1 — L4 defect qty multiplied by d1_l4_factor in weekly AND monthly defect counts
+    d1_l4_halving: bool = True
     # D1 explicit factor — only used when d1_l4_halving is True
-    d1_l4_factor: float = L4_FACTOR_LEGACY
+    d1_l4_factor: float = L4_FACTOR
     # D2 — scrap threshold uses >= 3 (True) instead of > 3 (False)
     d2_rouge_gte: bool = False
     # D4 — ACCEPT excluded from monthly nd accumulator
@@ -63,7 +62,7 @@ def LegacyConfig() -> Config:  # noqa: N802  (acts like a constructor alias)
     """Return a Config with every legacy divergence active."""
     return Config(
         d1_l4_halving=True,
-        d1_l4_factor=L4_FACTOR_LEGACY,
+        d1_l4_factor=L4_FACTOR,
         d2_rouge_gte=True,
         d4_accept_excluded_monthly=True,
         d5_sunday_anchor=True,
@@ -75,5 +74,6 @@ def LegacyConfig() -> Config:  # noqa: N802  (acts like a constructor alias)
 
 
 def CorrectedConfig() -> Config:  # noqa: N802
-    """Return a Config with every divergence corrected (rule-compliant)."""
+    """Return a Config that applies every decision in docs/DECISIONS.md
+    (D1 kept as an explicit parameter, D2–D9 fixed)."""
     return Config()
